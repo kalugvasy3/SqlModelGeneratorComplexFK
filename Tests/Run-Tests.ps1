@@ -1,4 +1,4 @@
-﻿param([switch]$NoRestore)
+﻿param([switch]$NoRestore, [string]$TypeScriptCompiler)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -18,4 +18,8 @@ if (-not $NoRestore) {
 Invoke-DotNet -Arguments @('build', $generatorProject, '--no-restore', '-c', 'Release', '-warnaserror')
 Invoke-DotNet -Arguments @('run', '--project', $fixturesProject, '--no-restore', '-c', 'Release', '--', $outputDirectory)
 Invoke-DotNet -Arguments @('run', '--project', $smokeProject, '--no-restore', '-c', 'Release')
-Write-Output 'All local regression checks passed. No database was contacted.'
+$typeScriptCheck = Join-Path $PSScriptRoot 'TypeScriptSmoke/check.cjs'
+if ($TypeScriptCompiler) { & node $typeScriptCheck $TypeScriptCompiler }
+else { & node $typeScriptCheck }
+if ($LASTEXITCODE -ne 0) { throw "TypeScript checks failed with exit code $LASTEXITCODE" }
+Write-Output 'All local regression checks passed. No database was contacted.' 

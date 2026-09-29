@@ -1,0 +1,6 @@
+{
+  "name": "sqlmodelgenerator-typescript-tests",
+  "private": true,
+  "scripts": { "test": "node check.cjs" },
+  "devDependencies": { "typescript": "5.9.3" }
+}

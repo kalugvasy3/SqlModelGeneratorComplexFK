@@ -363,3 +363,6 @@ MigrationBackup/
 FodyWeavers.xsd
 # Synthetic models emitted by regression tests
 Tests/GeneratedSmoke/Generated/
+
+Tests/TypeScriptGenerated/
+Tests/TypeScriptSmoke/node_modules/

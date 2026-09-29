@@ -1,7 +1,8 @@
-namespace SqlModelGenerator.Metadata.Models;
+﻿namespace SqlModelGenerator.Metadata.Models;
 
 public sealed class DbParameterInfo
 {
+    public string PropertyName { get; set; } = string.Empty;
     public int Ordinal { get; set; }
     public string Name { get; set; } = string.Empty;
     public string ParameterName => Name.StartsWith("@") ? Name : "@" + Name;

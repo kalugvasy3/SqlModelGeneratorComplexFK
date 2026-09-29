@@ -12,7 +12,7 @@ public static class ModelPreparation
     {
         var usedTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            contextName, "Entities", "Views", "Procedures", "DbContext", "DbSet", "DbContextOptions",
+            contextName, "Entities", "Views", "Procedures", "ProcedureSupport", "DbContext", "DbSet", "DbContextOptions",
             "ModelBuilder", "DeleteBehavior", "Task", "List", "SqlParameter", "SqlDbType", "ParameterDirection",
             "CancellationToken", "DBNull", "IDictionary", "NotSupportedException", "CON", "PRN", "AUX", "NUL",
             "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -47,6 +47,7 @@ public static class ModelPreparation
             .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var proc in model.Procedures.OrderBy(x => x.Schema, StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal))
         {
+            if (!proc.ParametersComplete) proc.GenerationError ??= "Procedure parameter metadata is incomplete.";
             var desired = NameHelper.ToPascalCase(proc.Name);
             if (duplicateProcedures.Contains(desired))
                 desired = NameHelper.ToPascalCase(proc.Schema) + desired;
@@ -67,6 +68,16 @@ public static class ModelPreparation
             if (proc.ResultColumns.Any(c => string.IsNullOrEmpty(c.Name)) || proc.ResultColumns.GroupBy(c => c.Name, StringComparer.OrdinalIgnoreCase).Any(g => g.Count() > 1))
                 proc.GenerationError = "Result columns must have distinct, nonempty SQL aliases for EF materialization.";
             if (proc.GenerationError != null) Warn(model, $"Procedure [{proc.Schema}].[{proc.Name}]: {proc.GenerationError}");
+        }
+        // Allocate new DTO names only after existing method/result names, preserving the old public API.
+        foreach (var proc in model.Procedures.OrderBy(x => x.Schema, StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal))
+        {
+            proc.ParametersClassName = NameHelper.Unique(proc.MethodName + "Parameters", usedTypes);
+            proc.OutputClassName = NameHelper.Unique(proc.MethodName + "Output", usedTypes);
+            var used = MemberNames(proc.ParametersClassName);
+            used.Add(proc.OutputClassName);
+            foreach (var param in proc.Parameters.OrderBy(x => x.Ordinal))
+                param.PropertyName = NameHelper.Unique(NameHelper.ToPascalCase(param.Name.TrimStart('@')), used);
         }
         foreach (var fk in model.ForeignKeys.OrderBy(x => x.DependentTable.Schema, StringComparer.Ordinal).ThenBy(x => x.Name, StringComparer.Ordinal))
         {

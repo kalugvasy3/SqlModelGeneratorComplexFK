@@ -12,6 +12,7 @@ public sealed class ProcedureGenerator
     public void Generate(IEnumerable<DbProcedureInfo> procedures)
     {
         var list = procedures.OrderBy(p => p.Schema, StringComparer.Ordinal).ThenBy(p => p.Name, StringComparer.Ordinal).ToList();
+        new ProcedureContractsGenerator(_options).Generate(list);
         var dir = Path.Combine(_options.OutputRoot, "Procedures");
         Directory.CreateDirectory(dir);
         foreach (var p in list.Where(p => p.HasResultSet && p.GenerationError == null))
@@ -34,7 +35,11 @@ public sealed class ProcedureGenerator
         w.WriteLine($"namespace {_options.RootNamespace};");
         w.WriteLine($"public partial class {_options.DbContextName}");
         w.OpenBlock();
-        foreach (var p in list) WriteMethod(w, p);
+        foreach (var p in list)
+        {
+            WriteMethod(w, p);
+            if (p.ParametersComplete) WriteObjectMethod(w, p);
+        }
         w.CloseBlock();
         File.WriteAllText(Path.Combine(dir, _options.DbContextName + ".Procedures.g.cs"), w.ToString());
     }
@@ -92,4 +97,63 @@ public sealed class ProcedureGenerator
         w.WriteLine("return result;");
         w.CloseBlock();
     }
+    private void WriteObjectMethod(CodeWriter w, DbProcedureInfo proc)
+    {
+        var parameters = proc.Parameters.OrderBy(p => p.Ordinal).ToList();
+        var prefix = $"global::{_options.RootNamespace}.Procedures.";
+        var resultType = prefix + proc.ResultClassName;
+        var returnType = proc.HasResultSet && proc.GenerationError == null ? $"Task<List<{resultType}>>" : "Task<int>";
+        var output = parameters.Any(p => p.IsOutput) ? $", {prefix}{proc.OutputClassName}? outputValues = null" : "";
+        // Inference leaves old calls such as FooAsync(null) or FooAsync(default) unambiguous.
+        w.WriteLine($"public {(proc.GenerationError == null ? "async " : "")}{returnType} {proc.MethodName}Async<TParameters>(TParameters parameters, CancellationToken cancellationToken = default{output})");
+        w.WriteLine($"    where TParameters : {prefix}{proc.ParametersClassName}");
+        w.OpenBlock();
+        w.WriteLine("global::System.ArgumentNullException.ThrowIfNull(parameters);");
+        if (proc.GenerationError != null)
+        {
+            w.WriteLine($"throw new NotSupportedException({Literal("Procedure metadata is incomplete: " + proc.GenerationError)});");
+            w.CloseBlock();
+            return;
+        }
+        foreach (var p in parameters.Where(p => p.IsOutput))
+            w.WriteLine($"if (!parameters.{p.PropertyName}.IsSpecified) throw new global::System.ArgumentException({Literal("Assign " + p.PropertyName + " explicitly (null is allowed) to capture OUTPUT; omitted OUTPUT defaults cannot be captured safely.")}, nameof(parameters));");
+        w.WriteLine("var sqlParameters = new List<object>();");
+        for (var i = 0; i < parameters.Count; i++)
+        {
+            var p = parameters[i];
+            w.WriteLine($"SqlParameter? p{i} = null;");
+            w.WriteLine($"if (parameters.{p.PropertyName}.IsSpecified)");
+            w.OpenBlock();
+            w.WriteLine($"p{i} = new SqlParameter({Literal("@__arg" + i)}, {SqlTypeMapper.ToSqlDbTypeExpression(p.SqlTypeName)})");
+            w.OpenBlock();
+            w.WriteLine($"Value = (object?)parameters.{p.PropertyName}.GetValue() ?? DBNull.Value,");
+            w.WriteLine($"Direction = ParameterDirection.{(p.IsOutput ? "InputOutput" : "Input")}");
+            w.CloseBlock(";");
+            if (ParameterSize(p) is int size) w.WriteLine($"p{i}.Size = {size};");
+            if (p.Precision is > 0) w.WriteLine($"p{i}.Precision = {p.Precision};");
+            if (p.Scale is byte scale) w.WriteLine($"p{i}.Scale = {scale};");
+            w.WriteLine($"sqlParameters.Add(p{i});");
+            w.CloseBlock();
+        }
+        var command = $"EXEC {SqlIdentifier(proc.Schema)}.{SqlIdentifier(proc.Name)}";
+        var escaped = command.Replace("{", "{{").Replace("}", "}}");
+        if (parameters.Count == 0) w.WriteLine($"var sql = {Literal(escaped)};");
+        else
+        {
+            var args = parameters.Select((p, i) => p.IsOutput ? Literal($"@__arg{i} OUTPUT")
+                : $"(parameters.{p.PropertyName}.IsSpecified ? {Literal("@__arg" + i)} : \"DEFAULT\")");
+            w.WriteLine($"var sql = {Literal(escaped + " ")} + string.Join(\", \", new string[] {{ {string.Join(", ", args)} }});");
+        }
+        if (proc.HasResultSet) w.WriteLine($"var result = await Set<{resultType}>().FromSqlRaw(sql, sqlParameters.ToArray()).AsNoTracking().ToListAsync(cancellationToken);");
+        else w.WriteLine("var result = await Database.ExecuteSqlRawAsync(sql, sqlParameters, cancellationToken);");
+        for (var i = 0; i < parameters.Count; i++)
+            if (parameters[i].IsOutput)
+            {
+                var p = parameters[i];
+                w.WriteLine($"if (outputValues != null) outputValues.{p.PropertyName} = p{i}!.Value is null or DBNull ? null : ({ProcedureContractsGenerator.OutputType(p)})p{i}!.Value;");
+            }
+        w.WriteLine("return result;");
+        w.CloseBlock();
+    }
+
 }

@@ -5,6 +5,7 @@ using SqlModelGenerator.Metadata;
 using SqlModelGenerator.Metadata.Models;
 
 var target = Path.GetFullPath(args.Single());
+var tsTarget = Path.GetFullPath(Path.Combine(target, "..", "..", "TypeScriptGenerated"));
 var model = new DatabaseModel();
 DbColumnInfo Col(string name, string sql = "int", bool nullable = false) => new()
 {
@@ -71,6 +72,22 @@ duplicate.ResultColumns.Add(new() { Ordinal = 1, Name = "Value", SqlTypeName = "
 duplicate.ResultColumns.Add(new() { Ordinal = 2, Name = "Value", SqlTypeName = "int", ClrTypeName = "int" });model.Procedures.Add(duplicate);
 var quoted = new DbProcedureInfo { Name = "A]{B}\"", Schema = "odd]schema" }; model.Procedures.Add(quoted);
 
+// Contracts must coexist with table names and preserve legacy method names.
+Table("EchoParameters", Col("Id"));
+var echo = new DbProcedureInfo { Name = "Echo", Schema = "dbo" };
+echo.Parameters.Add(new() { Ordinal = 1, Name = "@filter", SqlTypeName = "nvarchar", ClrTypeName = "string?", IsNullable = true, MaxLength = 80 });
+model.Procedures.Add(echo);
+var onlyLong = new DbProcedureInfo { Name = "OnlyLong", Schema = "dbo" };
+onlyLong.Parameters.Add(new() { Ordinal = 1, Name = "@value", SqlTypeName = "bigint", ClrTypeName = "long" });
+model.Procedures.Add(onlyLong);
+var defaults = new DbProcedureInfo { Name = "Defaults", Schema = "dbo" };
+defaults.Parameters.Add(new() { Ordinal = 1, Name = "@first", SqlTypeName = "int", ClrTypeName = "int?", IsNullable = true });
+defaults.Parameters.Add(new() { Ordinal = 2, Name = "@middle", SqlTypeName = "nvarchar", ClrTypeName = "string?", IsNullable = true, MaxLength = -1 });
+defaults.Parameters.Add(new() { Ordinal = 3, Name = "@last", SqlTypeName = "int", ClrTypeName = "int" });
+model.Procedures.Add(defaults);
+var brokenParameters = new DbProcedureInfo { Name = "BrokenParameters", Schema = "dbo", ParametersComplete = false };
+model.Procedures.Add(brokenParameters);
+
 // Exercise DMV decoding with deliberately shuffled ordinals and exact SQL catalog data types.
 var data = new DataTable();
 data.Columns.Add("error_message", typeof(string)); data.Columns.Add("is_nullable", typeof(bool));
@@ -84,7 +101,11 @@ Check(ProcedureGenerator.ParameterSize(nonquery.Parameters[0]) == 40, "Unicode s
 Check(ProcedureGenerator.ParameterSize(nonquery.Parameters[2]) == -1, "MAX size retained");
 Check(ProcedureGenerator.CommandText(nonquery) == "EXEC [dbo].[DoWork] @__arg0, @__arg1 OUTPUT, @__arg2 OUTPUT", "EXEC syntax / OUTPUT");
 Check(ProcedureGenerator.CommandText(quoted) == "EXEC [odd]]schema].[A]]{B}\"]", "SQL identifier escaping");
-var mainOptions = new CodeGeneratorOptions("Smoke", Path.Combine(target, "Main"), "AppDbContext");
+Table("WireTypes", Col("Id"), Col("Active", "bit"), Col("OptionalName", "nvarchar", true), Col("CreatedAt", "datetime2"),
+    Col("Duration", "time"), Col("LargeId", "bigint"), Col("Price", "decimal"), Col("Blob", "varbinary"),
+    Col("Variant", "sql_variant", true), Col("Constructor"), Col("URLValue", "nvarchar"));
+var mainOptions = new CodeGeneratorOptions("Smoke", Path.Combine(target, "Main"), "AppDbContext",
+    BuildTypeScriptClasses: true, TypeScriptOutputFolder: Path.Combine(tsTarget, "Main"));
 ModelGenerator.Generate(model, mainOptions);
 Check(model.ForeignKeys.Single(x => x.Name == "FK_Profile").IsUnique, "unique FK");
 Check(model.ForeignKeys.Single(x => x.Name == "FK_Keyless").SkipReason != null, "keyless FK warning");
@@ -118,3 +139,57 @@ tempTable.Name = "New"; ModelGenerator.Generate(tempModel, lifecycleOptions);
 Check(!File.Exists(Path.Combine(lifecycle, "Entities", "Old.cs")), "obsolete generated file removed");
 Check(File.ReadAllText(Path.Combine(lifecycle, "Keep.txt")) == "user file", "user file retained");
 Console.WriteLine($"PASS: metadata, names, procedure SQL/size, output lifecycle; generated {model.Tables.Count} tables, {model.ForeignKeys.Count} foreign keys and 5 model variants.");
+
+Check(TypeScriptGenerator.JsonPropertyName("URLValue") == "urlValue", "ASP.NET acronym naming");
+Check(TypeScriptTypeMapper.ToType("bigint", false) == "number", "bigint follows JSON wire type");
+Check(TypeScriptTypeMapper.ToType("nvarchar", true) == "string | null", "nullable TypeScript scalar");
+Check(TypeScriptTypeMapper.ToType("datetime2", false) == "string", "dates use JSON string");
+Check(TypeScriptTypeMapper.ToType("varbinary", false) == "string", "byte arrays use base64 string");
+Check(TypeScriptTypeMapper.Note("decimal") != null, "decimal precision note");
+Check(!File.Exists(Path.Combine(tsTarget, "Main", "procedures", "UnknownResult.ts")), "unsupported procedure omitted in TypeScript");
+Check(File.Exists(Path.Combine(tsTarget, "Main", "procedures", "ReadRowsResult.ts")), "procedure result generated in TypeScript");
+var disabledOptions = new CodeGeneratorOptions("DisabledSmoke", Path.Combine(tsTarget, "DisabledCSharp"), "DisabledContext");
+Check(!disabledOptions.ShouldBuildTypeScript, "old three-argument callers default off");
+Check(!(disabledOptions with { BuildTypeScriptClasses = true }).ShouldBuildTypeScript, "missing folder means off");
+Check(!(disabledOptions with { BuildTypeScriptClasses = true, TypeScriptOutputFolder = "  " }).ShouldBuildTypeScript, "blank folder means off");
+var unusedFolder = Path.Combine(tsTarget, "NotCreated");
+ModelGenerator.Generate(new(), disabledOptions with { TypeScriptOutputFolder = unusedFolder });
+Check(!Directory.Exists(unusedFolder), "folder alone cannot enable TypeScript");
+ModelGenerator.Generate(new(), disabledOptions with { BuildTypeScriptClasses = true });
+var existingTs = File.ReadAllText(Path.Combine(tsTarget, "Main", "index.ts"));
+ModelGenerator.Generate(new(), disabledOptions with { TypeScriptOutputFolder = Path.Combine(tsTarget, "Main") });
+Check(existingTs == File.ReadAllText(Path.Combine(tsTarget, "Main", "index.ts")), "disabled generation preserves existing TypeScript");
+try
+{
+    ModelGenerator.Generate(new(), disabledOptions with { BuildTypeScriptClasses = true, TypeScriptOutputFolder = disabledOptions.OutputRoot });
+    throw new Exception("same output directory accepted");
+}
+catch (ArgumentException) { }
+var tsLifecycleOptions = lifecycleOptions with { OutputRoot = Path.Combine(tsTarget, "LifecycleCSharp"),
+    BuildTypeScriptClasses = true, TypeScriptOutputFolder = Path.Combine(tsTarget, "Lifecycle") };
+tempTable.Name = "Old"; ModelGenerator.Generate(tempModel, tsLifecycleOptions);
+File.WriteAllText(Path.Combine(tsLifecycleOptions.TypeScriptOutputFolder!, "Keep.ts"), "// user file");
+tempTable.Name = "New"; ModelGenerator.Generate(tempModel, tsLifecycleOptions);
+Check(!File.Exists(Path.Combine(tsLifecycleOptions.TypeScriptOutputFolder!, "entities", "Old.ts")), "obsolete TypeScript removed");
+Check(File.ReadAllText(Path.Combine(tsLifecycleOptions.TypeScriptOutputFolder!, "Keep.ts")) == "// user file", "custom TypeScript retained");
+var clashFolder = Path.Combine(tsTarget, "Clash"); Directory.CreateDirectory(clashFolder);
+File.WriteAllText(Path.Combine(clashFolder, "index.ts"), "// user-owned index");
+var csBefore = File.ReadAllText(Path.Combine(disabledOptions.OutputRoot, "DisabledContext.g.cs"));
+try
+{
+    ModelGenerator.Generate(tempModel, disabledOptions with { BuildTypeScriptClasses = true, TypeScriptOutputFolder = clashFolder });
+    throw new Exception("user TypeScript overwritten");
+}
+catch (IOException) { }
+Check(File.ReadAllText(Path.Combine(clashFolder, "index.ts")) == "// user-owned index", "TypeScript collision preserves user file");
+Check(File.ReadAllText(Path.Combine(disabledOptions.OutputRoot, "DisabledContext.g.cs")) == csBefore, "TypeScript collision prevents C# publication too");
+ModelGenerator.Generate(new(), disabledOptions with { BuildTypeScriptClasses = true, TypeScriptOutputFolder = Path.Combine(tsTarget, "Empty") });
+Check(File.ReadAllText(Path.Combine(tsTarget, "Empty", "index.ts")).Contains("export {};"), "empty TypeScript remains a module");
+Console.WriteLine("PASS: optional TypeScript flags/folder, JSON names/types, nullability, procedure results, protected publication and regeneration.");
+
+Check(echo.MethodName == "Echo" && echo.ParametersClassName == "EchoParameters2", "new DTO name does not rename legacy method or table");
+Check(!File.Exists(Path.Combine(mainOptions.OutputRoot, "Procedures", brokenParameters.ParametersClassName + ".cs")), "incomplete parameter list does not generate misleading C# DTO");
+Check(!File.Exists(Path.Combine(tsTarget, "Main", "procedures", brokenParameters.ParametersClassName + ".ts")), "incomplete parameter list does not generate misleading TS DTO");
+Check(File.Exists(Path.Combine(tsTarget, "Main", "procedures", unknown.ParametersClassName + ".ts")), "known parameters survive unknown result schema");
+Check(File.Exists(Path.Combine(mainOptions.OutputRoot, "Procedures", nonquery.OutputClassName + ".cs")), "typed OUTPUT class generated");
+Console.WriteLine("PASS: procedure parameter/output contracts, name collisions and incomplete metadata handling.");

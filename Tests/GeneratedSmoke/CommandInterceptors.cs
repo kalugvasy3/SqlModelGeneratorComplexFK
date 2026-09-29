@@ -17,11 +17,15 @@ sealed class NeverConnect : DbConnectionInterceptor
 
 sealed class CapturedCommands : DbCommandInterceptor
 {
+    public object?[] InputValues { get; private set; } = [];
+    public int CommandCount { get; private set; }
     public string Text { get; private set; } = "";
     public int[] Sizes { get; private set; } = [];
     public CancellationToken Token { get; private set; }
     private void Capture(DbCommand command, CancellationToken token)
     {
+        CommandCount++;
+        InputValues = command.Parameters.Cast<DbParameter>().Select(p => p.Value).ToArray();
         Text = command.CommandText;
         Sizes = command.Parameters.Cast<DbParameter>().Select(p => p.Size).ToArray();
         Token = token;

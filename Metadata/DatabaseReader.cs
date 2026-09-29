@@ -157,7 +157,9 @@ public sealed class DatabaseReader
         {
             try
             {
+                proc.ParametersComplete = false;
                 await ReadParametersAsync(connection, proc, token);
+                proc.ParametersComplete = true;
                 await using var cmd = new SqlCommand("""
                     SELECT is_hidden, column_ordinal, name, is_nullable, system_type_name, error_message
                     FROM sys.dm_exec_describe_first_result_set_for_object(@objectId, 0)

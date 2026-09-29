@@ -2,6 +2,9 @@
 
 public sealed class DbProcedureInfo
 {
+    public string ParametersClassName { get; set; } = string.Empty;
+    public string OutputClassName { get; set; } = string.Empty;
+    public bool ParametersComplete { get; set; } = true;
     public string SetName { get; set; } = string.Empty;
     public int ObjectId { get; set; }
     public string? GenerationError { get; set; }
