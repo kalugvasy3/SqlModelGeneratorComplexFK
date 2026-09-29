@@ -1,0 +1,21 @@
+SQL Model Generator report
+Tables: 0; views: 0; procedures: 0
+Foreign keys: 0; generated: 0
+This is a model of an existing database, not a complete schema/migration backup.
+Only the first procedure result set is described. Generated list methods buffer that result in memory.
+Procedure DTOs: omitted INPUT requests SQL DEFAULT; explicit null sends NULL. INPUT/OUTPUT must be explicitly initialized (null allowed).
+SQL Server validates defaults/required inputs; sys.parameters does not reliably expose T-SQL defaults. RETURN status codes are not captured.
+
+TypeScript: enabled; folder: C:\Users\vasilykalugin\source\repos\SqlModelGenerator-master\Tests\TypeScriptGenerated\Empty
+TypeScript properties follow ASP.NET Core camelCase JSON naming. Dates/TimeSpan/GUID/binary values are strings; SQL NULL maps to null.
+TypeScript numbers follow default JSON serialization: bigint/decimal/money can lose precision in JavaScript. Use string-valued API DTOs for exact values.
+Navigation properties are optional; generated classes do not hydrate JSON or load related data.
+
+Names:
+
+Foreign keys:
+
+Procedures:
+
+Warnings:
+None.
